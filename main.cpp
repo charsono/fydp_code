@@ -2,6 +2,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <iostream>
+#include <fstream>
 
 using namespace cv;
 using namespace std;
@@ -9,7 +10,14 @@ using namespace std;
 // Global variable describing person characteristics
 Scalar PERSON_HSV;
 Mat PERSON_TMPLT;
-Scalar LOWER_BOUND, UPPER_BOUND;
+//Scalar LOWER_BOUND, UPPER_BOUND;
+int HUE_AVG;
+
+struct MoveData {
+	int x;
+	int y;
+	int area;
+};
 
 Mat resize_img(Mat img, int size) {
 	double r = size*1.0 / img.cols;
@@ -24,9 +32,125 @@ Mat load_hsv_image(Mat image_bgr, int size=500) {
 	return result;
 }
 
-Mat filter_green_background(Mat image_hsv) {
+vector<int> get_non_zero_bins(Mat hist) {
+	vector<int> peak_values;
+	for (int h = 0; h < hist.rows; h++)
+	{
+		if (hist.at<float>(h) > 0) {
+			peak_values.push_back(h);
+		}
+	}
+	return peak_values;
+}
+
+vector<int> get_peak_values(Mat hist) {
+	vector<int> peak_values;
+	vector<pair<int, int>> peak_values_dict;
+	int window[9] = {};
+	for (int h = 4; h < hist.rows; h++)
+	{
+		for (int i = 4; i >= 0; i--) {
+			// Filling sliding window
+			window[i] = hist.at<float>(h + i - 4);
+			if (i != 4) {
+				window[8 - i] = hist.at<float>(h - i + 4);
+				if (window[4] < window[i] || window[4] < window[8 - i]) {
+					break;
+				}
+			}
+			if (i == 0 && hist.at<float>(h) > 0) {
+				peak_values_dict.push_back(make_pair(h, hist.at<float>(h)));
+			}
+		}
+	}
+	sort(peak_values_dict.begin(), peak_values_dict.end(), [=](std::pair<int, int>& a, std::pair<int, int>& b)
+	{
+		return a.second > b.second;
+	}
+	);
+
+	for (vector<pair<int,int>>::iterator it = peak_values_dict.begin(); it != peak_values_dict.end(); ++it)
+	{
+		if (peak_values.size() < 11) {
+			peak_values.push_back(it->first);
+		}
+	}
+
+	return peak_values;
+}
+
+std::vector<Mat> get_hsv_histogram(Mat image, String desc, bool is_save=false) {
+	vector<Mat> hsv_planes;
+	split(image, hsv_planes);
+
+	int histSize = 180;
+	int histSizeSV = 256;
+	float range[] = {0, 180};
+	const float* histRange = { range };
+	float range_sv[] = { 0, 256};
+	const float* histRange_sv = { range_sv };
+
+	Mat h_hist, s_hist, v_hist;
+
+	calcHist(&hsv_planes[0], 1, 0, Mat(), h_hist, 1, &histSize, &histRange, true, false);
+	calcHist(&hsv_planes[1], 1, 0, Mat(), s_hist, 1, &histSizeSV, &histRange_sv, true, false);
+	calcHist(&hsv_planes[2], 1, 0, Mat(), v_hist, 1, &histSizeSV, &histRange_sv, true, false);
+
+	vector<Mat> histograms = { h_hist, s_hist, v_hist };
+
+	if (is_save) {
+		// Output peak values
+
+		ofstream out(desc + ".txt");
+		for (int h = 0; h < h_hist.rows; h++)
+		{
+			out << h << " " << h_hist.at<float>(h) << endl;
+		}
+		out << endl;
+		std::vector<int> peak_values = get_peak_values(h_hist);
+		for (int i = 0; i < peak_values.size(); i++) {
+			out << peak_values[i] << endl;
+		}
+		out.close();
+
+		// Draw the histograms for H, S and V
+		int hist_w = 360; int hist_h = 200;
+		int bin_w = cvRound((double)hist_w / histSize);
+		Mat histImage(hist_h, hist_w, CV_8UC3, Scalar(0, 0, 0));
+
+		int hist_w_sv = 512; int hist_h_sv = 400;
+		int bin_w_sv = cvRound((double)hist_w_sv / histSizeSV);
+		Mat histImageS(hist_h_sv, hist_w_sv, CV_8UC3, Scalar(0, 0, 0));
+		Mat histImageV(hist_h_sv, hist_w_sv, CV_8UC3, Scalar(0, 0, 0));
+
+		normalize(h_hist, h_hist, 0, histImage.rows, NORM_MINMAX, -1, Mat());
+		normalize(s_hist, s_hist, 0, histImageS.rows, NORM_MINMAX, -1, Mat());
+		normalize(v_hist, v_hist, 0, histImageV.rows, NORM_MINMAX, -1, Mat());
+
+		/// Draw for each channel
+		for (int i = 1; i < histSize; i++)
+		{
+			line(histImage, Point(bin_w*(i - 1), hist_h - cvRound(h_hist.at<float>(i - 1))),
+				Point(bin_w*(i), hist_h - cvRound(h_hist.at<float>(i))),
+				Scalar(255, 0, 0), 2, 8, 0);
+			line(histImageS, Point(bin_w_sv*(i - 1), hist_h_sv - cvRound(s_hist.at<float>(i - 1))),
+				Point(bin_w_sv*(i), hist_h_sv - cvRound(s_hist.at<float>(i))),
+				Scalar(255, 0, 0), 2, 8, 0);
+			line(histImageV, Point(bin_w_sv*(i - 1), hist_h_sv - cvRound(v_hist.at<float>(i - 1))),
+				Point(bin_w_sv*(i), hist_h_sv - cvRound(v_hist.at<float>(i))),
+				Scalar(255, 0, 0), 2, 8, 0);
+		}
+
+		imwrite(desc + "_h.jpg", histImage);
+		imwrite(desc + "_s.jpg", histImageS);
+		imwrite(desc + "_v.jpg", histImageV);
+	}
+	return histograms;
+}
+
+Mat filter_green_background(Mat image_hsv, int green_value) {
 	Mat mask, result;
-	inRange(image_hsv, Scalar(40, 0, 0), Scalar(55, 255, 255), mask);
+	inRange(image_hsv, Scalar(green_value - 7, 0, 0), Scalar(green_value + 7, 255, 255), mask);
 	mask = 255 - mask;
 	bitwise_and(image_hsv, image_hsv, result, mask = mask);
 
@@ -34,15 +158,29 @@ Mat filter_green_background(Mat image_hsv) {
 }
 
 Mat get_person_with_color(Mat img) {
+	vector<Mat> segmented_hists = get_hsv_histogram(img, "img");
+	std::vector<int> segmented_value = get_non_zero_bins(segmented_hists[0]);
+
+	int diff = 180;
+	int hue_avg = HUE_AVG;
+	for (int i = 0; i < segmented_value.size(); i++) {
+		if (abs(segmented_value[i]-HUE_AVG) < diff) {
+			diff = abs(segmented_value[i]-HUE_AVG);
+			hue_avg = segmented_value[i];
+		}
+	}
+	Scalar lower_bound = Scalar(std::max(hue_avg - 3, 0), 0, 0);
+	Scalar upper_bound = Scalar(std::min(hue_avg + 3, 255), 255, 255);
+
 	Mat filtered_image, mask;
-	inRange(img, LOWER_BOUND, UPPER_BOUND, mask);
+	inRange(img, lower_bound, upper_bound, mask);
 
 	//morphological opening (remove small objects from the foreground)
 	erode(mask, mask, getStructuringElement(MORPH_ELLIPSE, Size(3, 3)));
 	dilate(mask, mask, getStructuringElement(MORPH_ELLIPSE, Size(3, 3)));
 
 	//morphological closing (fill small holes in the foreground)
-	dilate(mask, mask, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
+	dilate(mask, mask, getStructuringElement(MORPH_ELLIPSE, Size(7, 7)));
 	erode(mask, mask, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
 
 	bitwise_and(img, img, filtered_image, mask = mask);
@@ -66,7 +204,7 @@ Mat get_person_with_tmplt(Mat img) {
 
 		// Match Template, and get coordinate found
 		Mat result;
-		matchTemplate(img, PERSON_TMPLT, result, TM_CCOEFF);
+		matchTemplate(img, PERSON_TMPLT, result, TM_CCOEFF_NORMED);
 		double minVal; double maxVal; Point minLoc; Point maxLoc;
 		minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
 
@@ -98,25 +236,106 @@ Mat hsv2gray(Mat img) {
 	return result;
 }
 
-void find_person_in_img(Mat img, String descrption = "") {
-	Mat input_image = load_hsv_image(img);
-
+MoveData find_person_in_img(Mat input_image, String description = "test") {
 	// Apply filtering
 	Mat color_filtered_image = get_person_with_color(input_image);
+	imwrite("out/"+description + "_color_filtered.jpg", color_filtered_image);
+	//waitKey(0);
 	Mat tmplt_filtered_image = get_person_with_tmplt(color_filtered_image);
 
 	// Get person location
 	Moments person_moments = moments(hsv2gray(tmplt_filtered_image), true);
-	cout << descrption << endl;
-	cout << "Area: " << person_moments.m00 << endl;
-	cout << "x: " << person_moments.m10 / person_moments.m00 << endl;
-	cout << "y: " << person_moments.m01 / person_moments.m00 << endl << endl;
+	MoveData result = {};
+	result.x = (int)(person_moments.m10 / person_moments.m00);
+	result.y = (int)(person_moments.m01 / person_moments.m00);
+	result.area = (int)person_moments.m00;
 
 	// Plot location in image
-	rectangle(tmplt_filtered_image, Point(323, 110), Point(327, 115), Scalar(255, 255, 255), CV_FILLED);
-	imshow("Image", tmplt_filtered_image);
-	waitKey(0);
+	rectangle(tmplt_filtered_image, Point((int)(result.x-2), 
+		(int)(result.y- 2)), Point((int)(result.x + 2), (int)(result.y + 2)), 
+		Scalar(255, 255, 255), CV_FILLED);
 
+	//imwrite("output/" + descrption + "_" + to_string(area) + "_" + to_string(x) + "_" + to_string(y) + ".jpg",
+	//	tmplt_filtered_image);
+	imwrite("out/" + description + "_tmplt_filtered.jpg", tmplt_filtered_image);
+	//waitKey(0);
+	return result;
+}
+
+Mat k_means(Mat input_image, int clusterCount) {
+	//step 1 : map the src to the samples
+	Mat samples(input_image.total(), 3, CV_32F);
+	auto samples_ptr = samples.ptr<float>(0);
+	for (int row = 0; row != input_image.rows; ++row) {
+		auto src_begin = input_image.ptr<uchar>(row);
+		auto src_end = src_begin + input_image.cols * input_image.channels();
+		//auto samples_ptr = samples.ptr<float>(row * src.cols);
+		while (src_begin != src_end) {
+			samples_ptr[0] = src_begin[0];
+			samples_ptr[1] = src_begin[1];
+			samples_ptr[2] = src_begin[2];
+			samples_ptr += 3; src_begin += 3;
+		}
+	}
+
+	//step 2 : apply kmeans to find labels and centers
+	Mat labels;
+	int attempts = 5;
+	Mat centers;
+	kmeans(samples, clusterCount, labels,
+		TermCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS,
+			10, 0.01),
+		attempts, KMEANS_PP_CENTERS, centers);
+
+	//step 3 : map the centers to the output
+	Mat new_image(input_image.size(), input_image.type());
+	for (int row = 0; row != input_image.rows; ++row) {
+		auto new_image_begin = new_image.ptr<uchar>(row);
+		auto new_image_end = new_image_begin + new_image.cols * 3;
+		auto labels_ptr = labels.ptr<int>(row * input_image.cols);
+
+		while (new_image_begin != new_image_end) {
+			int const cluster_idx = *labels_ptr;
+			auto centers_ptr = centers.ptr<float>(cluster_idx);
+			new_image_begin[0] = centers_ptr[0];
+			new_image_begin[1] = centers_ptr[1];
+			new_image_begin[2] = centers_ptr[2];
+			new_image_begin += 3; ++labels_ptr;
+		}
+	}
+	return new_image;
+}
+
+Mat sharpen_image(Mat input_image) {
+	Mat frame, output;
+	GaussianBlur(input_image, frame, Size(7, 7), 0);
+	addWeighted(frame, -1, input_image, 2, 0, output);
+	return output;
+}
+
+int get_hue_avg(vector<int> h_values) {
+	int result = h_values[0];
+	for (int i = 1; i < std::min(4, (int)h_values.size()); i++) {
+		int value = h_values[i];
+		if (value < result + 11 && value > result - 11) {
+			result = (result * i + value) / (i + 1);
+		}
+	}
+	return result;
+}
+
+Mat take_picture(VideoCapture cap) {
+	Mat streamImg;
+	while (1) {
+		cap >> streamImg;
+		imshow("cam", streamImg);
+		char k = waitKey(1);
+		if (k == 'a') {
+			break;
+		}
+	}
+	destroyWindow("cam");
+	return streamImg;
 }
 
 int main(int argc, char** argv)

@@ -340,37 +340,93 @@ Mat take_picture(VideoCapture cap) {
 
 int main(int argc, char** argv)
 {
-	/* Part 1 */
-	Mat person_original = load_hsv_image(imread("input/benchmark_cropped.jpg"));
-	Mat person = resize_img(filter_green_background(person_original), 200);
-	Mat color = load_hsv_image(imread("input/color_benchmark.jpg"));
+	// Continuously Take picture for testing
+	/*VideoCapture cap(0);
 
-	// Setting global variable describing person characteristics
-	// For Color
-	PERSON_HSV = mean(color);
-	int hue_avg = (int)ceil(PERSON_HSV.val[0]);
-	int s_avg = (int)ceil(PERSON_HSV.val[1]);
-	/*int v_avg = (int)ceil(avg_hsv.val[2]);*/
-	LOWER_BOUND = Scalar(std::max(hue_avg - 5, 0), std::max(s_avg - 40, 0), 0);
-	UPPER_BOUND = Scalar(std::min(hue_avg + 5, 255), std::min(s_avg + 40, 255), 255);
+	//cap.set(CV_CAP_PROP_FRAME_WIDTH,364);
+	//cap.set(CV_CAP_PROP_FRAME_HEIGHT, 720);
+	if (!cap.isOpened()) {
+		return -1;
+	}
+	else {
+		printf("Camera is open /n ");
+	}
+	
+	int i = 218;
+	while (1) {
+		Mat img = take_picture(cap);
+		//imshow("result", img);
+
+		//char k = waitKey(0);
+		//if (k == 's') {
+			imwrite("out/img_" + to_string(i) + ".jpg", img);
+			i++;
+		//}
+		//else if (k == 'c') {
+			continue;
+		//}
+		//destroyWindow("result");
+	}*/
+
+	/* Part 1 */
+	
+	// Take picture against green background
+	Mat original_image = imread("out/img_217.jpg"); //take_picture(cap);
+	original_image = sharpen_image(original_image);
+	Mat person_original = load_hsv_image(original_image);
+	
+	// Filter Green Background
+	vector<Mat> person_histograms = get_hsv_histogram(person_original, "img_3125");
+	std::vector<int> person_original_h_pv = get_peak_values(person_histograms[0]);
+	int green_value = 70;
+	for (int i = 0; i < person_original_h_pv.size(); i++) {
+		if (person_original_h_pv[i] > 45 && person_original_h_pv[i] < 85) {
+			green_value = person_original_h_pv[i];
+			break;
+		}
+	}
+	Mat person = resize_img(filter_green_background(person_original, green_value), 200);
+
+	// Getting Person Template
+	person_histograms = get_hsv_histogram(person, "filtered_person_0");
+	person = k_means(person, 3);
+	person_original_h_pv = get_peak_values(person_histograms[0]);
+
+	/*
+	for (int i = 0; i < person_original_h_pv.size(); i++) {
+		printf("%d ", person_original_h_pv[i]);
+	}
+	printf("end \n");
+	
+	for (int i = 0; i < person_original_s_pv.size(); i++) {
+		printf("%d ", person_original_s_pv[i]);
+	}*/
+	
+	HUE_AVG = get_hue_avg(person_original_h_pv);
+	cout << "Hue avg:" << HUE_AVG;
+
 	// For person template
 	PERSON_TMPLT = get_person_with_color(person);
-
+	//imshow("tmplt", PERSON_TMPLT);
+	//waitKey(0);
+	//cout << "Hue avg: " << hue_avg << ", S_avg: " << s_avg << endl;
 
 	/* Part 2 */
-	for (int i = 0; i < 71; i++) {
-		// Load Image
-		String file_name;
-		if (i < 10) {
-			file_name = "input/IMG_290" + to_string(i) + ".jpg";
-		}
-		else {
-			file_name = "input/IMG_29" + to_string(i) + ".jpg";
-		}
-		 
-		Mat input_img = imread(file_name);
-		find_person_in_img(input_img, file_name);	
+	ofstream fout("result_yola.txt");
+	for (int i = 136; i < 210; i++) {
+		Mat image = load_hsv_image(imread("out/img_"+to_string(i)+".jpg"));
+		image = sharpen_image(image);
+		Mat new_image = k_means(image, 3);
+
+		imwrite("out/segmented_image_"+to_string(i)+".jpg", new_image);
+
+		//waitKey(0);
+		MoveData move_data = find_person_in_img(new_image, "segmented_image_"+to_string(i));
+		
+		fout << "Segmented_image_" + to_string(i) << endl;
+		fout << "Area: " << move_data.area << ", x, y:" << move_data.x << ", " << move_data.y << endl << endl;
 	}
+	fout.close();
 
 	return 0;
 }

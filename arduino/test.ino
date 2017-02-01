@@ -7,17 +7,18 @@ Servo motor2;
 Servo motor3;
 Servo motor4;
 
-const int motor1Pin = 2;
-const int motor2Pin = 3;
-const int motor3Pin = 4;
-const int motor4Pin = 5;
+const int motor1Pin = 3;
+const int motor2Pin = 4;
+const int motor3Pin = 5;
+const int motor4Pin = 6;
 
-// 0 - 93 Forward, > 93 Reverse
-const int motor1StopPos = 93;
-const int motor4StopPos = 93;
 // 0 - 93 Reverse, > 93 Forward
-const int motor2StopPos = 93;
+const int motor1StopPos = 93;
 const int motor3StopPos = 93;
+// 0 - 93 Forward, > 93 Reverse
+const int motor2StopPos = 93;
+const int motor4StopPos = 93;
+
 
 bool stopFlag = false;
 
@@ -37,24 +38,79 @@ void initializePins() {
 void loop() {
   // put your main code here, to run repeatedly:
   if (!stopFlag) {
-    drive();
-    delay(1000);
-    stop();
+    turnLeft(5);
+    delay(1500);
+    stopAndDelay();
+    turnRight(5);
+    delay(1500);
+    stopAndDelay();
     stopFlag = true;
   }
 }
 
-void drive() {
-  motor1.write(83);
-  motor2.write(103);
-  motor3.write(103);
-  motor4.write(83);  
+void demo() {
+  drive(-5);
+  delay(1000);
+  stopAndDelay();
+  drive(5);
+  delay(1000);
+  stopAndDelay();
+  
+  turnSharpLeft(10);
+  delay(3000);
+  stopAndDelay();
+  turnSharpRight(10);
+  delay(3000);
+  stopAndDelay();
+}
+
+void stopAndDelay() {
+  stop();
+  delay(1000);
+}
+
+void drive(int speed) {
+  setSpeed(speed);
+}
+
+void setSpeed(int speed) {
+  setLeftWingSpeed(speed);
+  setRightWingSpeed(speed);
+}
+
+void setLeftWingSpeed(int speed) {
+  motor1.write(motor1StopPos + speed);
+  motor3.write(motor3StopPos + speed);
+}
+
+void setRightWingSpeed(int speed) {
+  motor2.write(motor2StopPos - speed);
+  motor4.write(motor4StopPos - speed);
 }
 
 void stop() {
-  motor1.write(motor1StopPos);
-  motor2.write(motor2StopPos);
-  motor3.write(motor3StopPos);
-  motor4.write(motor4StopPos);
+  setSpeed(93);
+}
+
+void turnSharpLeft(int speed) {
+  setLeftWingSpeed(-speed);
+  setRightWingSpeed(speed);
+}
+
+void turnSharpRight(int speed) {
+  setLeftWingSpeed(speed);
+  setRightWingSpeed(-speed);
+}
+
+void turnLeft(int speed) {
+  int bufferSpeed = speed/2;
+  setLeftWingSpeed(bufferSpeed);
+  setRightWingSpeed(speed);
+}
+
+void turnRight(int speed) {
+  int bufferSpeed = speed/2;
+  setLeftWingSpeed(speed);
+  setRightWingSpeed(bufferSpeed);
 }
 

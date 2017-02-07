@@ -163,12 +163,14 @@ Mat get_person_with_color(Mat img) {
 
 	int diff = 180;
 	int hue_avg = HUE_AVG;
+	
 	for (int i = 0; i < segmented_value.size(); i++) {
 		if (abs(segmented_value[i]-HUE_AVG) < diff) {
 			diff = abs(segmented_value[i]-HUE_AVG);
 			hue_avg = segmented_value[i];
 		}
 	}
+	
 	Scalar lower_bound = Scalar(std::max(hue_avg - 3, 0), 0, 0);
 	Scalar upper_bound = Scalar(std::min(hue_avg + 3, 255), 255, 255);
 
@@ -190,43 +192,32 @@ Mat get_person_with_color(Mat img) {
 
 Mat get_person_with_tmplt(Mat img) {
 	Point matchLoc;
-	double maxVal_found = NULL;	Point maxLoc_found; double r_found;
+	double maxVal_found = NULL; Point maxLoc_found;
 
-	/* Resize original image to fit it with template. Continuously match template */
-	for (int i = 20; i >= 0; i--) {
-		float scale = 0.04*i + 0.2;
-		Mat resized = resize_img(img, (int)(scale*img.cols));
-		if (resized.rows < PERSON_TMPLT.rows || resized.cols < PERSON_TMPLT.cols) {
-			break;
-		}
+	// Match Template, and get coordinate found
+	Mat result;
+	matchTemplate(img, PERSON_TMPLT, result, TM_CCOEFF_NORMED);
+	double minVal; double maxVal; Point minLoc; Point maxLoc;
+	minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
 
-		double r = img.cols / resized.cols; // Resizing ratio
-
-		// Match Template, and get coordinate found
-		Mat result;
-		matchTemplate(img, PERSON_TMPLT, result, TM_CCOEFF_NORMED);
-		double minVal; double maxVal; Point minLoc; Point maxLoc;
-		minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
-
-		// If box found has better correlation, assign as new box
-		if (maxVal_found == NULL || maxVal > maxVal_found) {
-			maxVal_found = maxVal;
-			maxLoc_found = maxLoc;
-			r_found = r;
-		}
+	// If box found has better correlation, assign as new box
+	if (maxVal_found == NULL || maxVal > maxVal_found) {
+		maxVal_found = maxVal;
+		maxLoc_found = maxLoc;
 	}
+	
 	// Box coordinate of the person
-	Point start_coord = Point((int)(maxLoc_found.x*r_found), (int)(maxLoc_found.y*r_found));
-	Point end_coord = Point((int)((maxLoc_found.x + PERSON_TMPLT.cols)*r_found), (int)((maxLoc_found.y + PERSON_TMPLT.rows)*r_found));
+	Point start_coord = Point((int)(maxLoc_found.x), (int)(maxLoc_found.y));
+	Point end_coord = Point((int)((maxLoc_found.x + PERSON_TMPLT.cols)), (int)((maxLoc_found.y + PERSON_TMPLT.rows)));
 
 	// Create Mask
 	Mat mask = Mat::zeros(img.size(), img.type());
 	rectangle(mask, start_coord, end_coord, Scalar(255, 255, 255), CV_FILLED);
 
-	Mat result;
-	bitwise_and(img, mask, result);
+	Mat final_result;
+	bitwise_and(img, mask, final_result);
 
-	return result;
+	return final_result;
 }
 
 Mat hsv2gray(Mat img) {
@@ -236,10 +227,21 @@ Mat hsv2gray(Mat img) {
 	return result;
 }
 
-MoveData find_person_in_img(Mat input_image, String description = "test") {
+Mat mask_image(Mat input_image, Mat mask_image) {
+	Mat hsv_channels[3], mask, result;
+	split(mask_image, hsv_channels);
+	threshold(hsv_channels[2], mask, 1, 1, THRESH_BINARY);
+	bitwise_and(input_image, input_image, result, mask);
+
+	return result;
+}
+
+MoveData find_person_in_img(Mat input_image, Mat original_image, Mat rgb_image, String description = "test") {
+	int start_s = clock();
 	// Apply filtering
-	Mat color_filtered_image = get_person_with_color(input_image);
-	imwrite("out/"+description + "_color_filtered.jpg", color_filtered_image);
+	Mat color_filtered_image = get_person_with_color(input_image, description);
+	imwrite(description + "_color_filtered.jpg", color_filtered_image);
+
 	//waitKey(0);
 	Mat tmplt_filtered_image = get_person_with_tmplt(color_filtered_image);
 
@@ -250,15 +252,14 @@ MoveData find_person_in_img(Mat input_image, String description = "test") {
 	result.y = (int)(person_moments.m01 / person_moments.m00);
 	result.area = (int)person_moments.m00;
 
+	Mat final_image = mask_image(rgb_image, tmplt_filtered_image);
 	// Plot location in image
-	rectangle(tmplt_filtered_image, Point((int)(result.x-2), 
-		(int)(result.y- 2)), Point((int)(result.x + 2), (int)(result.y + 2)), 
-		Scalar(255, 255, 255), CV_FILLED);
+	rectangle(final_image, Point((int)(result.x-5),
+		(int)(result.y- 5)), Point((int)(result.x + 5), (int)(result.y + 5)), 
+		Scalar(0, 255, 0), CV_FILLED);
 
-	//imwrite("output/" + descrption + "_" + to_string(area) + "_" + to_string(x) + "_" + to_string(y) + ".jpg",
-	//	tmplt_filtered_image);
-	imwrite("out/" + description + "_tmplt_filtered.jpg", tmplt_filtered_image);
-	//waitKey(0);
+
+	imwrite(description + "_final.jpg", final_image);
 	return result;
 }
 
@@ -371,12 +372,12 @@ int main(int argc, char** argv)
 	/* Part 1 */
 	
 	// Take picture against green background
-	Mat original_image = imread("out/img_217.jpg"); //take_picture(cap);
+	Mat original_image = imread("out/david_1.jpg"); //take_picture(cap);
 	original_image = sharpen_image(original_image);
 	Mat person_original = load_hsv_image(original_image);
 	
 	// Filter Green Background
-	vector<Mat> person_histograms = get_hsv_histogram(person_original, "img_3125");
+	vector<Mat> person_histograms = get_hsv_histogram(person_original, "dc_out/david_tmplt");
 	std::vector<int> person_original_h_pv = get_peak_values(person_histograms[0]);
 	int green_value = 70;
 	for (int i = 0; i < person_original_h_pv.size(); i++) {
@@ -385,46 +386,42 @@ int main(int argc, char** argv)
 			break;
 		}
 	}
-	Mat person = resize_img(filter_green_background(person_original, green_value), 200);
+	
+	Mat person = filter_green_background(resize_img(person_original, 100), green_value);
 
 	// Getting Person Template
 	person_histograms = get_hsv_histogram(person, "filtered_person_0");
-	person = k_means(person, 3);
+	Mat person_segmented = k_means(person, 2);
+	person_histograms = get_hsv_histogram(person, "dc_v1/filtered_david");
+	
 	person_original_h_pv = get_peak_values(person_histograms[0]);
 
-	/*
-	for (int i = 0; i < person_original_h_pv.size(); i++) {
-		printf("%d ", person_original_h_pv[i]);
-	}
-	printf("end \n");
-	
-	for (int i = 0; i < person_original_s_pv.size(); i++) {
-		printf("%d ", person_original_s_pv[i]);
-	}*/
-	
 	HUE_AVG = get_hue_avg(person_original_h_pv);
-	cout << "Hue avg:" << HUE_AVG;
+	cout << "Hue avg:" << HUE_AVG << endl;
 
 	// For person template
-	PERSON_TMPLT = get_person_with_color(person);
-	//imshow("tmplt", PERSON_TMPLT);
-	//waitKey(0);
-	//cout << "Hue avg: " << hue_avg << ", S_avg: " << s_avg << endl;
+	PERSON_TMPLT = get_person_with_color(person_segmented);
 
 	/* Part 2 */
-	ofstream fout("result_yola.txt");
-	for (int i = 136; i < 210; i++) {
-		Mat image = load_hsv_image(imread("out/img_"+to_string(i)+".jpg"));
-		image = sharpen_image(image);
-		Mat new_image = k_means(image, 3);
+	ofstream fout("dc_v2/result.txt");
+	for (int i = 1; i < 2004; i+=3) {
+		int start_2 = clock();
+		Mat rgb_image = resize_img(imread("dc/img_" + to_string(i) + ".jpg"), 250);
+		Mat image = sharpen_image(rgb_image);
+		image = load_hsv_image(image, 250);
 
-		imwrite("out/segmented_image_"+to_string(i)+".jpg", new_image);
+		Mat new_image = k_means(image, 3);
+		//get_hsv_histogram(image, "dc_out/img_" + to_string(i));
+		//imwrite("dc_out/segmented_image_"+to_string(i)+".jpg", new_image);
 
 		//waitKey(0);
-		MoveData move_data = find_person_in_img(new_image, "segmented_image_"+to_string(i));
+		MoveData move_data = find_person_in_img(new_image, image, rgb_image, "dc_v2/image_"+to_string(i));
 		
 		fout << "Segmented_image_" + to_string(i) << endl;
-		fout << "Area: " << move_data.area << ", x, y:" << move_data.x << ", " << move_data.y << endl << endl;
+		fout << "Curr. Hue Avg: " << HUE_AVG << endl;
+		fout << "Area: " << move_data.area << ", x, y:" << move_data.x << ", " << move_data.y << endl;
+		int stop_2 = clock();
+		fout << "time: " << double(stop_2 - start_2) / double(CLOCKS_PER_SEC) * 1000 << " ms"<< endl << endl;
 	}
 	fout.close();
 
